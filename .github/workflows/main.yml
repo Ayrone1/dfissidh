@@ -1,0 +1,31 @@
+name: Marketapp Watcher
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 */5 * * *"
+
+concurrency:
+  group: marketapp-watcher
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run watcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MARKETAPP_API_KEY: ${{ secrets.MARKETAPP_API_KEY }}
+        run: python bot.py
