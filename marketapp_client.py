@@ -204,7 +204,7 @@ def price_in_gram(listing: dict, gram_usd_rate: float | None) -> float | None:
     return amount
 
 
-def get_collection_floors(collection_addresses: set[str], debug: bool = False) -> dict[str, float]:
+def get_collection_floors(collection_addresses: set[str], debug: bool = False) -> dict[str, float] | None:
     """Fetch the current floor price, but only for the given collection
     address(es) -- e.g. just the Anonymous Numbers collection we're
     actually watching, instead of parsing/logging every collection on the
@@ -213,6 +213,16 @@ def get_collection_floors(collection_addresses: set[str], debug: bool = False) -
     There's no per-collection lookup endpoint, so this still has to fetch
     the full /v1/collections/ list under the hood, but only returns (and
     only debug-prints) the address(es) you asked for.
+
+    Returns None (not {}) if the request itself failed -- this is a
+    distinct outcome from "the request succeeded but no matching
+    collections were found," which legitimately returns {}. Callers rely
+    on this distinction: {} would previously get treated by
+    _within_floor_threshold as "floor unknown, let it through", so any
+    transient network failure here silently disabled the price-threshold
+    filter entirely. Returning None instead makes call sites handle a
+    failed fetch explicitly (e.g. reuse a cached floor) instead of
+    accidentally waving every listing through.
     """
     url = f"{MARKETAPP_BASE_URL}/v1/collections/"
     try:
@@ -221,10 +231,10 @@ def get_collection_floors(collection_addresses: set[str], debug: bool = False) -
         collections = response.json()
     except requests.RequestException as e:
         print(f"[marketapp_client] Failed to fetch collection floors: {e}")
-        return {}
+        return None
     except ValueError:
         print("[marketapp_client] Collection floors response was not valid JSON.")
-        return {}
+        return None
 
     floors = {}
     for c in collections:

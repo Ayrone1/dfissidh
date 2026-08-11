@@ -20,6 +20,11 @@ Notification behavior:
   more than one category and clears at least one of their thresholds, it's
   still notified, tagged with every category label it actually qualifies
   for.
+- Floor prices are cached across polling cycles. If a single cycle's
+  floor-price fetch fails (timeout, rate limit, etc.), the bot reuses the
+  last known-good floor prices for that cycle instead of treating every
+  listing as unfiltered -- see get_collection_floors() in
+  marketapp_client.py and _within_floor_threshold() below.
 """
 import signal
 import time
@@ -89,14 +94,21 @@ def _within_floor_threshold(
     """Whether a listing is priced within *this watch's own* max-percent-
     above-floor threshold. Falls back to the global MAX_PERCENT_ABOVE_FLOOR
     default if the watch doesn't set `max_percent_above_floor` itself.
-    If the floor or price can't be determined, don't block the match.
+
+    If the floor or price can't be determined, the listing does NOT count
+    as a match -- an unknown floor must never be treated as "assume it's
+    fine," since that's what silently disables this filter (e.g. during a
+    transient floor-price API failure). `collection_floors` is expected to
+    be the cached, last-known-good floors (see main()/check_watches()), so
+    "unknown" here means genuinely never fetched successfully, not just
+    "this cycle's fetch had a hiccup."
     """
     threshold = watch.get("max_percent_above_floor", MAX_PERCENT_ABOVE_FLOOR)
     floor_price = collection_floors.get(listing.get("collection_address"))
     price = price_in_gram(listing, gram_usd_rate)
 
     if not floor_price or floor_price <= 0 or price is None:
-        return True
+        return False
 
     pct_above_floor = (price - floor_price) / floor_price * 100
     return pct_above_floor <= threshold
@@ -183,13 +195,19 @@ def _price_signature(listing: dict) -> tuple:
     return (listing.get("currency"), listing.get("min_bid"))
 
 
-def check_watches(notified_prices: dict[str, tuple]) -> None:
+def check_watches(notified_prices: dict[str, tuple], floor_cache: dict[str, float]) -> None:
     """Fetch everything matching the configured watches and notify about
     matches that are either new (not in `notified_prices` yet) or whose
     price has changed since the last time we notified about them.
 
     `notified_prices` is mutated in place: {address: (currency, min_bid)}
     for everything we've ever sent a notification for during this run.
+
+    `floor_cache` is mutated in place: {collection_address: floor_price},
+    the last known-good floor price per collection. It persists across
+    calls (owned by main()'s loop) so that a single cycle's failed
+    floor-price fetch doesn't wipe out floor data the bot already knew --
+    see get_collection_floors() and _within_floor_threshold().
     """
     attribute_watches = [w for w in WATCHES if w.get("type", "gift") == "attribute"]
     watched_collections = {w["collection_address"] for w in attribute_watches}
@@ -198,7 +216,22 @@ def check_watches(notified_prices: dict[str, tuple]) -> None:
     # collection(s) we're actually watching (e.g. just Anonymous Numbers),
     # not every collection on the site.
     gram_usd_rate = get_gram_usd_rate()
-    collection_floors = get_collection_floors(watched_collections, debug=DEBUG)
+
+    fetched_floors = get_collection_floors(watched_collections, debug=DEBUG)
+    if fetched_floors is None:
+        # This cycle's floor-price fetch failed outright (network error,
+        # timeout, bad response, etc). Reuse whatever floors we already
+        # have cached instead of treating floor prices as unknown -- an
+        # unknown floor makes _within_floor_threshold reject the listing,
+        # so falling back to a stale-but-real floor for one cycle is far
+        # safer than either bypassing the filter or blacking out every
+        # watch until the next successful fetch.
+        if DEBUG:
+            print("    -> Floor price fetch failed this cycle, reusing last known floor prices")
+    else:
+        floor_cache.update(fetched_floors)
+    collection_floors = floor_cache
+
     if DEBUG:
         print(f"    -> GRAM/USD rate: {gram_usd_rate}")
 
@@ -300,10 +333,11 @@ def main():
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
     notified_prices: dict[str, tuple] = {}
+    floor_cache: dict[str, float] = {}  # persists across polls -- see check_watches()
 
     try:
         while True:
-            check_watches(notified_prices)
+            check_watches(notified_prices, floor_cache)
             time.sleep(POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         print("\nStopped. Bye!")
