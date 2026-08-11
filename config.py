@@ -110,7 +110,7 @@ WATCHES = [
 ]
 
 # --- Polling ---
-POLL_INTERVAL_SECONDS = 60  # how often to check, e.g. every 1 minute
+POLL_INTERVAL_SECONDS = 120  # how often to check, e.g. every 1 minute
 
 # For "attribute" watches, how many pages (100 items each) to scan per
 # check. The collection can have 100k+ items total, but only on-sale ones
