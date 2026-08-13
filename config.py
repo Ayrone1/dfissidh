@@ -76,7 +76,7 @@ WATCHES = [
             {"Has Two 8s": "Yes"},
         ],
         "exclude": {},
-        "max_percent_above_floor": 4,
+        "max_percent_above_floor": 3,
     },
     {
         "type": "attribute",
@@ -92,7 +92,7 @@ WATCHES = [
             {"Has Digit 8": "Yes", "6 or Fewer Unique Digits": "Yes"},
         ],
         "exclude": {"Has Digit 4": "Yes"},
-        "max_percent_above_floor": 20,
+        "max_percent_above_floor": 15,
     },
     {
         "type": "attribute",
