@@ -2,6 +2,10 @@
 
 Docs: https://api.marketapp.org/docs/
 """
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+
 import requests
 
 from config import MARKETAPP_API_KEY, MARKETAPP_BASE_URL
@@ -12,16 +16,60 @@ HEADERS = {
 }
 
 
+class HardTimeout(Exception):
+    """A request didn't complete within its hard wall-clock cap.
+
+    requests' own `timeout=` bounds the TCP connect and the read, but NOT
+    DNS resolution. If the OS resolver for the API host stalls (flaky
+    runner network, a dead upstream resolver), requests.get()/post() can
+    hang indefinitely with NO exception raised at all -- the process just
+    sits there, silently, no matter what `timeout=` was set to. We've
+    actually hit this: a fetch cycle just stopped mid-page with nothing
+    in the logs, and the job sat "running" for hours until something
+    external eventually killed it.
+
+    _request() below works around this by running the real network call
+    in a background thread and enforcing a hard timeout on *waiting for
+    it*, via ThreadPoolExecutor.result(timeout=...). Python can't
+    forcibly kill a thread that's truly stuck in a blocking syscall --
+    the old thread just keeps running in the background and its result
+    is discarded -- but this stops the main loop from waiting on it
+    forever, which is the actual failure we're guarding against.
+    """
+
+
+_REQUEST_EXECUTOR = ThreadPoolExecutor(max_workers=4)
+
+
+def _request(method: str, url: str, hard_timeout: float = 20, **kwargs):
+    """requests.get/requests.post wrapper with a hard wall-clock timeout
+    that also covers DNS-resolution hangs -- see HardTimeout above.
+    Raises HardTimeout if the call doesn't return within `hard_timeout`
+    seconds; otherwise behaves exactly like calling requests.<method>
+    directly (same return value, same requests.RequestException on
+    HTTP/network errors below that hard cap).
+    """
+    func = getattr(requests, method)
+    future = _REQUEST_EXECUTOR.submit(func, url, **kwargs)
+    try:
+        return future.result(timeout=hard_timeout)
+    except FutureTimeoutError:
+        raise HardTimeout(
+            f"{method.upper()} {url} did not complete within {hard_timeout}s "
+            f"(possible DNS stall or other hang requests' own timeout= doesn't catch)"
+        )
+
+
 def search_gift_listings(params: dict) -> list[dict]:
     """Query /v1/gifts/onsale/ -- fast server-side filtering for Gift collections."""
     url = f"{MARKETAPP_BASE_URL}/v1/gifts/onsale/"
     clean_params = {k: v for k, v in params.items() if v is not None}
 
     try:
-        response = requests.get(url, headers=HEADERS, params=clean_params, timeout=15)
+        response = _request("get", url, headers=HEADERS, params=clean_params, timeout=15)
         response.raise_for_status()
         data = response.json()
-    except requests.RequestException as e:
+    except (requests.RequestException, HardTimeout) as e:
         print(f"[marketapp_client] Gift request failed: {e}")
         return []
     except ValueError:
@@ -31,10 +79,22 @@ def search_gift_listings(params: dict) -> list[dict]:
     return data.get("items", [])
 
 
-def get_collection_onsale_items(collection_address: str, max_pages: int = 20, debug: bool = False) -> list[dict]:
+def get_collection_onsale_items(
+    collection_address: str, max_pages: int = 20, debug: bool = False, page_retries: int = 2
+) -> list[dict]:
     """Fetch on-sale items for any collection (gifts, usernames, numbers)
     via the generic /v1/nfts/collections/{address}/ endpoint, paginating
     with cursor up to max_pages (100 items per page).
+
+    Each individual page gets up to `page_retries` retries (with a short
+    backoff) before pagination gives up. Without this, a single slow
+    response on e.g. page 4 of 8 (timeout, transient 5xx, etc.) would
+    abort the whole fetch and silently hand back a truncated item list --
+    the collection scan quietly covers less ground that cycle, with no
+    error surfaced beyond a log line, and matches sitting on the
+    unfetched pages get missed for that cycle. Retrying the one slow page
+    first makes a full fetch far more likely, since these hiccups are
+    usually transient.
     """
     url = f"{MARKETAPP_BASE_URL}/v1/nfts/collections/{collection_address}/"
     items = []
@@ -45,19 +105,32 @@ def get_collection_onsale_items(collection_address: str, max_pages: int = 20, de
         if cursor:
             params["cursor"] = cursor
 
-        try:
-            response = requests.get(url, headers=HEADERS, params=params, timeout=15)
-            if debug:
-                print(f"[marketapp_client] page {page_num+1}: HTTP {response.status_code}")
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as e:
-            print(f"[marketapp_client] Collection request failed: {e}")
-            if hasattr(e, "response") and e.response is not None:
-                print(f"[marketapp_client] Response body: {e.response.text[:500]}")
-            break
-        except ValueError:
-            print("[marketapp_client] Collection response was not valid JSON.")
+        data = None
+        for attempt in range(page_retries + 1):
+            try:
+                response = _request("get", url, headers=HEADERS, params=params, timeout=15)
+                if debug:
+                    print(f"[marketapp_client] page {page_num+1}: HTTP {response.status_code}")
+                response.raise_for_status()
+                data = response.json()
+                break  # success -- stop retrying this page
+            except (requests.RequestException, HardTimeout) as e:
+                print(
+                    f"[marketapp_client] Collection request failed (page {page_num+1}, "
+                    f"attempt {attempt+1}/{page_retries+1}): {e}"
+                )
+                if hasattr(e, "response") and e.response is not None:
+                    print(f"[marketapp_client] Response body: {e.response.text[:500]}")
+                if attempt < page_retries:
+                    time.sleep(1.5 * (attempt + 1))  # brief backoff: 1.5s, then 3s
+                continue
+            except ValueError:
+                print("[marketapp_client] Collection response was not valid JSON.")
+                break  # not a network hiccup -- retrying won't help, stop this page
+
+        if data is None:
+            # This page never succeeded even after retries -- stop paginating
+            # and return whatever full pages we already have, same as before.
             break
 
         page_items = data.get("items", [])
@@ -226,10 +299,10 @@ def get_collection_floors(collection_addresses: set[str], debug: bool = False) -
     """
     url = f"{MARKETAPP_BASE_URL}/v1/collections/"
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
+        response = _request("get", url, headers=HEADERS, timeout=15)
         response.raise_for_status()
         collections = response.json()
-    except requests.RequestException as e:
+    except (requests.RequestException, HardTimeout) as e:
         print(f"[marketapp_client] Failed to fetch collection floors: {e}")
         return None
     except ValueError:
@@ -267,10 +340,10 @@ def get_gram_usd_rate() -> float | None:
     """
     url = f"{MARKETAPP_BASE_URL}/v1/fragment/stars/price/"
     try:
-        response = requests.post(url, headers=HEADERS, json={"quantity": 50}, timeout=15)
+        response = _request("post", url, headers=HEADERS, json={"quantity": 50}, timeout=15)
         response.raise_for_status()
         data = response.json()
-    except requests.RequestException as e:
+    except (requests.RequestException, HardTimeout) as e:
         print(f"[marketapp_client] Failed to fetch GRAM/USD rate: {e}")
         return None
     except ValueError:
