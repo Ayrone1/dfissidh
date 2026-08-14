@@ -66,20 +66,6 @@ MARKETAPP_BASE_URL = "https://api.marketapp.org"
 WATCHES = [
     {
         "type": "attribute",
-        "name": "Good Number",
-        "label": "Good Number",
-        "collection_address": "EQAOQdwdw8kGftJCSFgOErM1mBjYPe4DBPq8-AhF6vr9si5N",
-        # Either the SECOND digit of the body is 8 (e.g. body "08123456"),
-        # OR there are two-or-more 8's anywhere in the body.
-        "require_any_of": [
-            {"Second Digit Is 8": "Yes"},
-            {"Has Two 8s": "Yes"},
-        ],
-        "exclude": {},
-        "max_percent_above_floor": 1,
-    },
-    {
-        "type": "attribute",
         "name": "Lucky number",
         "label": "Lucky number",
         "collection_address": "EQAOQdwdw8kGftJCSFgOErM1mBjYPe4DBPq8-AhF6vr9si5N",
