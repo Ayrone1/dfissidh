@@ -78,7 +78,7 @@ WATCHES = [
             {"Has Digit 8": "Yes", "6 or Fewer Unique Digits": "Yes"},
         ],
         "exclude": {"Has Digit 4": "Yes"},
-        "max_percent_above_floor": 8,
+        "max_percent_above_floor": 2,
     },
     {
         "type": "attribute",
@@ -87,7 +87,7 @@ WATCHES = [
         "collection_address": "EQAOQdwdw8kGftJCSFgOErM1mBjYPe4DBPq8-AhF6vr9si5N",
         "require": {"Unique Digits": "5"},
         "exclude": {},
-        "max_percent_above_floor": 8,
+        "max_percent_above_floor": 2,
         # Kept as its own category -- note it still overlaps with Lucky
         # number's "6 or fewer unique digits" condition, so a 5-unique-
         # digit number that also has an 8 (and no 4) can get tagged with
