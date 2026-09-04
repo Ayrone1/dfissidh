@@ -81,6 +81,15 @@ WATCHES = [
         "max_percent_above_floor": 2,
     },
     {
+    "type": "attribute",
+    "name": "Test number",
+    "label": "Test number",
+    "collection_address": "EQAOQdwdw8kGftJCSFgOErM1mBjYPe4DBPq8-AhF6vr9si5N",
+    "require": {"Has Digit 4": "Yes"},
+    "exclude": {},
+    "max_percent_above_floor": 20,
+},
+    {
         "type": "attribute",
         "name": "Unique digits: 5",
         "label": "Unique digits: 5",
@@ -101,7 +110,7 @@ POLL_INTERVAL_SECONDS = 150  # how often to check, e.g. every 1 minute
 # For "attribute" watches, how many pages (100 items each) to scan per
 # check. The collection can have 100k+ items total, but only on-sale ones
 # are returned, and we only need to catch NEW ones each cycle.
-ATTRIBUTE_WATCH_MAX_PAGES = 20
+ATTRIBUTE_WATCH_MAX_PAGES = 4
 
 # Default max-percent-above-floor for any watch that doesn't set its own
 # "max_percent_above_floor". The color coding in notifier.py scales to
