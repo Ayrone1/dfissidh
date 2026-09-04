@@ -85,7 +85,7 @@ WATCHES = [
     "name": "Test number",
     "label": "Test number",
     "collection_address": "EQAOQdwdw8kGftJCSFgOErM1mBjYPe4DBPq8-AhF6vr9si5N",
-    "require": {"Has Digit 4": "Yes", "Has Digit 5": "Yes",  "Has Digit 6": "Yes"},
+    "require": {"Has Digit 4": "Yes", "Has Digit 5": "Yes",  "Has Digit 6": "Yes", "Has Digit 8": "Yes"},
     "exclude": {},
     "max_percent_above_floor": 20,
 },
