@@ -41,6 +41,11 @@ class HardTimeout(Exception):
 
 _REQUEST_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 
+# Pause between pages when paginating a collection. Marketapp rate-limits
+# (HTTP 429) requests that arrive too close together; raise this if you
+# still see 429s in the logs.
+PAGE_DELAY_SECONDS = 1.5
+
 
 def _request(method: str, url: str, hard_timeout: float = 20, **kwargs):
     """requests.get/requests.post wrapper with a hard wall-clock timeout
@@ -138,6 +143,8 @@ def get_collection_onsale_items(
         cursor = data.get("cursor")
         if not cursor or not page_items:
             break
+
+        time.sleep(PAGE_DELAY_SECONDS)  # stay under Marketapp's rate limit between pages
 
     return items
 
