@@ -44,7 +44,7 @@ _REQUEST_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 # Pause between pages when paginating a collection. Marketapp rate-limits
 # (HTTP 429) requests that arrive too close together; raise this if you
 # still see 429s in the logs.
-PAGE_DELAY_SECONDS = 1.5
+PAGE_DELAY_SECONDS = 2
 
 
 def _request(method: str, url: str, hard_timeout: float = 20, **kwargs):
