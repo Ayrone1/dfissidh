@@ -2,6 +2,7 @@
 
 Docs: https://api.marketapp.org/docs/
 """
+
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -44,6 +45,7 @@ _REQUEST_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 def _request(method: str, url: str, hard_timeout: float = 20, **kwargs):
     """requests.get/requests.post wrapper with a hard wall-clock timeout
     that also covers DNS-resolution hangs -- see HardTimeout above.
+
     Raises HardTimeout if the call doesn't return within `hard_timeout`
     seconds; otherwise behaves exactly like calling requests.<method>
     directly (same return value, same requests.RequestException on
@@ -64,7 +66,6 @@ def search_gift_listings(params: dict) -> list[dict]:
     """Query /v1/gifts/onsale/ -- fast server-side filtering for Gift collections."""
     url = f"{MARKETAPP_BASE_URL}/v1/gifts/onsale/"
     clean_params = {k: v for k, v in params.items() if v is not None}
-
     try:
         response = _request("get", url, headers=HEADERS, params=clean_params, timeout=15)
         response.raise_for_status()
@@ -75,7 +76,6 @@ def search_gift_listings(params: dict) -> list[dict]:
     except ValueError:
         print("[marketapp_client] Gift response was not valid JSON.")
         return []
-
     return data.get("items", [])
 
 
@@ -123,7 +123,7 @@ def get_collection_onsale_items(
                     print(f"[marketapp_client] Response body: {e.response.text[:500]}")
                 if attempt < page_retries:
                     time.sleep(1.5 * (attempt + 1))  # brief backoff: 1.5s, then 3s
-                continue
+                    continue
             except ValueError:
                 print("[marketapp_client] Collection response was not valid JSON.")
                 break  # not a network hiccup -- retrying won't help, stop this page
@@ -135,7 +135,6 @@ def get_collection_onsale_items(
 
         page_items = data.get("items", [])
         items.extend(page_items)
-
         cursor = data.get("cursor")
         if not cursor or not page_items:
             break
@@ -175,6 +174,7 @@ def compute_number_traits(name: str) -> dict:
     8" (the body's 2nd character, e.g. body "08123456" -> Yes). Computed
     on the number body only (prefix stripped -- see NUMBER_PREFIX above --
     so the prefix never counts toward any of these traits, in any watch).
+
     (Other traits shown by list_attributes.py, like Mask Left/Right or
     Arithmetic Progression, aren't computed here -- ask if you need those too.)
     """
@@ -213,8 +213,10 @@ def matches_conditions(listing: dict, require_options: list[dict], exclude: dict
     equal), OR'd together -- the listing matches if it fully satisfies AT
     LEAST ONE of them. An empty list (or a list containing only an empty
     dict) means "no requirement", i.e. everything passes this part.
+
     exclude: trait_type -> value that must NOT equal, applied on top of the
     above (always enforced, regardless of which require_option matched).
+
     Comparison is case- and whitespace-insensitive.
     """
     attrs = attributes_as_dict(listing)
@@ -233,7 +235,6 @@ def matches_conditions(listing: dict, require_options: list[dict], exclude: dict
             for trait_type, wanted_value in (require or {}).items()
         ):
             return True
-
     return False
 
 
@@ -262,7 +263,6 @@ def price_in_gram(listing: dict, gram_usd_rate: float | None) -> float | None:
     min_bid = listing.get("min_bid")
     if min_bid is None:
         return None
-
     decimals = CURRENCY_DECIMALS.get(currency, 9)
     try:
         amount = int(min_bid) / (10 ** decimals)
@@ -273,8 +273,32 @@ def price_in_gram(listing: dict, gram_usd_rate: float | None) -> float | None:
         if not gram_usd_rate:
             return None
         return amount / gram_usd_rate
-
     return amount
+
+
+def compute_unrestricted_floors(
+    collection_items: dict[str, list[dict]], gram_usd_rate: float | None
+) -> dict[str, float]:
+    """Floor per collection (in GRAM), computed from on-sale items that are
+    NOT restricted. Collections with no usable prices are omitted, so the
+    caller can fall back to another floor source (e.g. Marketapp's own
+    precomputed floor) for them.
+
+    Only as complete as the items passed in: if the fetch was truncated by
+    ATTRIBUTE_WATCH_MAX_PAGES, the true floor might sit on an unfetched page.
+    """
+    floors: dict[str, float] = {}
+    for address, items in collection_items.items():
+        prices = []
+        for item in items:
+            if item.get("is_restricted"):
+                continue
+            price = price_in_gram(item, gram_usd_rate)
+            if price is not None and price > 0:
+                prices.append(price)
+        if prices:
+            floors[address] = min(prices)
+    return floors
 
 
 def get_collection_floors(collection_addresses: set[str], debug: bool = False) -> dict[str, float] | None:
@@ -314,7 +338,6 @@ def get_collection_floors(collection_addresses: set[str], debug: bool = False) -
         address = c.get("address")
         if address not in collection_addresses:
             continue
-
         floor_raw = (c.get("extra_data") or {}).get("floor")
         if floor_raw is None:
             continue
@@ -322,11 +345,9 @@ def get_collection_floors(collection_addresses: set[str], debug: bool = False) -
             floor_value = float(floor_raw) / 1_000_000_000
         except (TypeError, ValueError):
             continue
-
         floors[address] = floor_value
         if debug:
             print(f"[marketapp_client] floor for {address}: raw={floor_raw} -> {floor_value}")
-
     return floors
 
 
@@ -354,7 +375,6 @@ def get_gram_usd_rate() -> float | None:
     usd = data.get("usd")
     if not gram or usd is None:
         return None
-
     try:
         return float(usd) / float(gram)
     except (TypeError, ValueError, ZeroDivisionError):
