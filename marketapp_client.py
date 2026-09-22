@@ -44,7 +44,7 @@ _REQUEST_EXECUTOR = ThreadPoolExecutor(max_workers=4)
 # Pause between pages when paginating a collection. Marketapp rate-limits
 # (HTTP 429) requests that arrive too close together; raise this if you
 # still see 429s in the logs.
-PAGE_DELAY_SECONDS = 2
+PAGE_DELAY_SECONDS = 1.5
 
 
 def _request(method: str, url: str, hard_timeout: float = 20, **kwargs):
@@ -358,25 +358,41 @@ def get_collection_floors(collection_addresses: set[str], debug: bool = False) -
     return floors
 
 
-def get_gram_usd_rate() -> float | None:
+def get_gram_usd_rate(retries: int = 2) -> float | None:
     """Fetch the current GRAM->USD exchange rate.
 
     Uses the documented /v1/fragment/stars/price/ endpoint, which returns
     the GRAM and USD cost of the same quantity of Stars -- the ratio
     usd/gram gives a live conversion rate without hardcoding or relying on
     a third-party price feed.
+
+    Retries like get_collection_onsale_items() does per page, with the
+    same 1.5s/3s backoff, since a single failed attempt here is not just a
+    missing number: every USDT-priced listing then has no GRAM-equivalent
+    price (price_in_gram returns None for it), and _within_floor_threshold
+    treats "can't determine the price" as "let it through" -- so one
+    dropped request could wave through a batch of USDT listings at any
+    price, no matter how far above floor. Retrying first makes that a lot
+    less likely; the call site should still not treat a None result here
+    as "no threshold applies" (see check_watches).
     """
     url = f"{MARKETAPP_BASE_URL}/v1/fragment/stars/price/"
-    try:
-        response = _request("post", url, headers=HEADERS, json={"quantity": 50}, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-    except (requests.RequestException, HardTimeout) as e:
-        print(f"[marketapp_client] Failed to fetch GRAM/USD rate: {e}")
-        return None
-    except ValueError:
-        print("[marketapp_client] GRAM/USD rate response was not valid JSON.")
-        return None
+    data = None
+    for attempt in range(retries + 1):
+        try:
+            response = _request("post", url, headers=HEADERS, json={"quantity": 50}, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            break
+        except (requests.RequestException, HardTimeout) as e:
+            print(f"[marketapp_client] Failed to fetch GRAM/USD rate (attempt {attempt+1}/{retries+1}): {e}")
+            if attempt < retries:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return None
+        except ValueError:
+            print("[marketapp_client] GRAM/USD rate response was not valid JSON.")
+            return None
 
     gram = data.get("gram")
     usd = data.get("usd")
